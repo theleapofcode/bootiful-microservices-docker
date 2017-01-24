@@ -1,0 +1,18 @@
+version: '2'
+services:
+    rabbitmq:
+        image: rabbitmq:latest
+        restart: always
+
+    configserver:
+        build:
+            context: ./bootiful-config-server/
+            dockerfile: Dockerfile
+        image: configserver
+        restart: always
+        ports:
+            - 8888:8888
+        volumes:
+            - ./tmp/configserver:/tmp
+
+
