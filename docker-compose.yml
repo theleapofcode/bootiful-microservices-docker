@@ -1,8 +1,40 @@
 version: '2'
 services:
     rabbitmq:
-        image: rabbitmq:latest
+        image: rabbitmq:management
         restart: always
+        ports:
+            - 5672:5672
+            - 15672:15672
+        
+    elasticsearch:
+        image: elasticsearch:latest
+        restart: always
+        ports:
+            - 9200:9200
+            - 9300:9300
+        command: elasticsearch -Etransport.host=0.0.0.0 -Ediscovery.zen.minimum_master_nodes=1
+            
+    logstash:
+        image: logstash:latest
+        restart: always
+        ports:
+            - 4560:4560
+        depends_on:
+            - elasticsearch
+        volumes:
+            - ./config/logstash.conf:/etc/logstash/conf.d/logstash.conf
+        command: -f /etc/logstash/conf.d/
+        
+    kibana:
+        image: kibana:latest
+        restart: always
+        ports:
+            - 5601:5601
+        depends_on:
+            - elasticsearch
+        volumes:
+            - ./config/kibana.yml:/etc/kibana/kibana.yml
 
     configserver:
         build:
@@ -12,7 +44,126 @@ services:
         restart: always
         ports:
             - 8888:8888
-        volumes:
-            - ./tmp/configserver:/tmp
+        depends_on:
+            - rabbitmq
+        command: ./wait-for-it.sh "rabbitmq:5672" --timeout=30 -- "java -jar /config-server.jar"
 
+    eurekaserver:
+        build:
+            context: ./bootiful-eureka-server/
+            dockerfile: Dockerfile
+        image: eurekaserver
+        restart: always
+        ports:
+            - 8761:8761
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" --timeout=30 -- "java -jar /eureka-server.jar"
+        
+    hystrixserver:
+        build:
+            context: ./bootiful-hystrix-server/
+            dockerfile: Dockerfile
+        image: hystrixserver
+        restart: always
+        ports:
+            - 9999:9999
+        depends_on:
+            - logstash
+        command: ./wait-for-it.sh "logstash:4560" --timeout=30 -- "java -jar /hystrix-server.jar"
+        
+    apigateway:
+        build:
+            context: ./bootiful-api-gateway/
+            dockerfile: Dockerfile
+        image: apigateway
+        restart: always
+        ports:
+            - 8085:8085
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+            - eurekaserver
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" "eurekaserver:8761" --timeout=30 -- "java -jar /api-gateway.jar"
 
+    faresservice:
+        build:
+            context: ./bootiful-flight-fares-service/
+            dockerfile: Dockerfile
+        image: faresservice
+        restart: always
+        ports:
+            - 8080:8080
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+            - eurekaserver
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" "eurekaserver:8761" --timeout=30 -- "java -jar /fares-service.jar"
+
+    searchservice:
+        build:
+            context: ./bootiful-flight-search-service/
+            dockerfile: Dockerfile
+        image: searchservice
+        restart: always
+        ports:
+            - 8090:8090
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+            - eurekaserver
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" "eurekaserver:8761" --timeout=30 -- "java -jar /search-service.jar"
+        
+    checkinservice:
+        build:
+            context: ./bootiful-flight-checkin-service/
+            dockerfile: Dockerfile
+        image: checkinservice
+        restart: always
+        ports:
+            - 8070:8070
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+            - eurekaserver
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" "eurekaserver:8761" --timeout=30 -- "java -jar /checkin-service.jar"
+        
+    bookservice:
+        build:
+            context: ./bootiful-flight-book-service/
+            dockerfile: Dockerfile
+        image: bookservice
+        restart: always
+        ports:
+            - 8060:8060
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+            - eurekaserver
+            - faresservice
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" "eurekaserver:8761" "faresservice:8080" --timeout=30 -- "java -jar /book-service.jar"
+        
+    managementwebsite:
+        build:
+            context: ./bootiful-flight-management-website/
+            dockerfile: Dockerfile
+        image: managementwebsite
+        restart: always
+        ports:
+            - 8001:8001
+        depends_on:
+            - logstash
+            - rabbitmq
+            - configserver
+            - eurekaserver
+            - bookservice
+            - checkinservice
+            - searchservice
+        command: ./wait-for-it.sh "logstash:4560" "rabbitmq:5672" "configserver:8888" "eurekaserver:8761" "bookservice:8060" "checkinservice:8070" "searchservice:8090" --timeout=30 -- "java -jar /management-website.jar"
